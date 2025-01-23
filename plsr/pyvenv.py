@@ -250,10 +250,10 @@ def _install_project_deps_if_needed(app_root: Path, venv_dir: Path, vpy: str) ->
       • Else if app-only → install from [project.dependencies],
       • Fallback to requirements.txt when provided.
     """
-    marker = venv_dir / ".pulsar-deps.sha256"
+    marker = venv_dir / ".plsr-deps.sha256"
     digest = _hash_inputs_for_deps(app_root)
 
-    force = os.getenv("PULSAR_FORCE_DEPS", "").strip().lower() in ("1", "true", "yes", "y")
+    force = os.getenv("PLSR_FORCE_DEPS", "").strip().lower() in ("1", "true", "yes", "y")
 
     need = True
     if marker.exists() and not force:
@@ -278,7 +278,7 @@ def _install_project_deps_if_needed(app_root: Path, venv_dir: Path, vpy: str) ->
     try_editable, reason = _should_try_editable(app_root, meta)
     if try_editable:
         install_spec = "."
-        extras = os.getenv("PULSAR_INSTALL_EXTRAS", "").strip()
+        extras = os.getenv("PLSR_INSTALL_EXTRAS", "").strip()
         if extras:
             install_spec = f".[{extras}]"
         console.info(f"Attempting editable install ({reason})")
@@ -338,7 +338,7 @@ def _load_dotenv_into(dst_env: dict, app_root: Path) -> None:
     to PYTHONPATH to mirror local.sh behavior.
     """
     try:
-        env_name = (dst_env.get("PULSAR_ENV") or dst_env.get("ENV") or "local").strip()
+        env_name = (dst_env.get("PLSR_ENV") or dst_env.get("ENV") or "local").strip()
         candidates = [
             app_root / f".env.{env_name}",
             app_root / f"env.{env_name}",
@@ -385,12 +385,12 @@ def should_use_repo_venv(argv: list[str]) -> bool:
       • We are handling a 'start' invocation (either 'start <env>' or '<env> start'),
       • Env is 'local' (exact),
       • The current microservice flavor is *not* 'db-mariadb' (i.e., it's a Python app),
-      • Not explicitly disabled via PULSAR_SKIP_REPO_VENV=1.
-    Force enable with PULSAR_FORCE_REPO_VENV=1.
+      • Not explicitly disabled via plsr_SKIP_REPO_VENV=1.
+    Force enable with plsr_FORCE_REPO_VENV=1.
     """
-    if os.getenv("PULSAR_SKIP_REPO_VENV", "").strip() in ("1", "true", "yes", "y"):
+    if os.getenv("PLSR_SKIP_REPO_VENV", "").strip() in ("1", "true", "yes", "y"):
         return False
-    if os.getenv("PULSAR_FORCE_REPO_VENV", "").strip() in ("1", "true", "yes", "y"):
+    if os.getenv("PLSR_FORCE_REPO_VENV", "").strip() in ("1", "true", "yes", "y"):
         return True
 
     tokens = [t for t in (argv or []) if t and not t.startswith("-")]
@@ -399,7 +399,7 @@ def should_use_repo_venv(argv: list[str]) -> bool:
         return False
 
     env_in_argv = _extract_env_from_argv(argv)
-    env_in_env = os.getenv("PULSAR_ENV") or os.getenv("ENV")
+    env_in_env = os.getenv("PLSR_ENV") or os.getenv("ENV")
     env_name = (env_in_argv or env_in_env or "local").strip().lower()
     if env_name != "local":
         return False
@@ -432,10 +432,10 @@ def _cleanup_repo_runtime(app_root: Path, venv_dir: Path) -> None:
     Cleanup routine for Python app runtime:
       • Remove all __pycache__ dirs under the repo,
       • Remove the repo-local virtualenv directory.
-    Can be skipped with PULSAR_KEEP_REPO_VENV=1.
+    Can be skipped with plsr_KEEP_REPO_VENV=1.
     """
-    if os.getenv("PULSAR_KEEP_REPO_VENV", "").strip().lower() in ("1", "true", "yes", "y"):
-        console.warn("Skipping cleanup (PULSAR_KEEP_REPO_VENV=1).")
+    if os.getenv("PLSR_KEEP_REPO_VENV", "").strip().lower() in ("1", "true", "yes", "y"):
+        console.warn("Skipping cleanup (PLSR_KEEP_REPO_VENV=1).")
         return
 
     console.section("Cleanup")
@@ -453,15 +453,15 @@ def _cleanup_repo_runtime(app_root: Path, venv_dir: Path) -> None:
 def spawn_in_repo_venv(argv: list[str]) -> int:
     """
     Ensure a repo‑local venv exists (preferring <APP_ROOT>/.venv) and re‑invoke
-    Pulsar inside it, preserving okobot‑pulsar on PYTHONPATH.
+    plsr inside it, preserving plsr on PYTHONPATH.
     Also loads .env files into the child environment (best effort).
 
     On exit (normal or via Ctrl‑C), clean up: remove __pycache__ dirs and the
-    repo venv, unless PULSAR_KEEP_REPO_VENV=1 is set.
+    repo venv, unless plsr_KEEP_REPO_VENV=1 is set.
     """
     app_root = _detect_app_root()
 
-    override = os.getenv("PULSAR_VENV_DIR")
+    override = os.getenv("PLSR_VENV_DIR")
     if override:
         venv_dir = Path(override).expanduser().resolve()
     else:
@@ -483,20 +483,20 @@ def spawn_in_repo_venv(argv: list[str]) -> int:
     repo_root = Path(__file__).resolve().parent.parent
 
     child = os.environ.copy()
-    child["PULSAR_VENV_ACTIVE"] = "1"
+    child["PLSR_VENV_ACTIVE"] = "1"
     child.setdefault("APP_ROOT", str(app_root))
     env_from_argv = _extract_env_from_argv(argv)
     if env_from_argv:
-        child.setdefault("PULSAR_ENV", env_from_argv)
+        child.setdefault("PLSR_ENV", env_from_argv)
 
     _load_dotenv_into(child, app_root)
 
     existing_pp = child.get("PYTHONPATH")
     child["PYTHONPATH"] = f"{repo_root}{os.pathsep}{existing_pp}" if existing_pp else str(repo_root)
 
-    cmd = [str(vpy), "-m", "okobot_pulsar.bootstrap", *argv]
+    cmd = [str(vpy), "-m", "plsr.bootstrap", *argv]
     console.section("Repo venv launcher")
-    console.info(f"Env:    {child.get('PULSAR_ENV', 'local')}")
+    console.info(f"Env:    {child.get('PLSR_ENV', 'local')}")
     console.info(f"Root:   {app_root}")
     console.info(f"Venv:   {venv_dir}")
 
@@ -520,7 +520,7 @@ def spawn_in_repo_venv(argv: list[str]) -> int:
 
 def _extract_env_from_argv(argv: list[str]) -> str | None:
     """
-    Support both 'pulsar start <env>' and 'pulsar <env> start' shapes.
+    Support both 'plsr start <env>' and 'plsr <env> start' shapes.
     """
     if not argv:
         return None
