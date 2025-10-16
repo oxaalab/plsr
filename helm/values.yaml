@@ -1,0 +1,43 @@
+# Release / naming
+flavor: "python-app"            # "db-mariadb" | "python-app"
+namespace: ""                   # If empty, uses Helm release namespace
+nameOverride: ""
+fullnameOverride: ""            # plsr sets this to <service name> at runtime
+
+# Workload sizing
+replicaCount: 1
+
+# Image (plsr sets repository+tag from microservice config)
+image:
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []            # e.g., ["ecr-pull-secret"]
+
+# Service
+service:
+  type: ClusterIP
+  name: app                     # "mysql" for db-mariadb; "app" (or "http") for apps
+  port: 8000                    # plsr overrides from microservice config; DB flows set 3306
+
+# Persistence (apps default off; DB flavor enables via plsr)
+persistentVolume:
+  enabled: false
+  size: 10Gi
+  storageClass: ""              # Leave empty to use cluster default
+
+# DB auth (used when deploying MariaDB flavor)
+auth:
+  secretName: ""                # plsr sets "<service>-root-<env>"
+  rootPassword: "changeMeRoot"
+  database: ""
+  username: ""
+  password: ""
+
+# Optional: generic ConfigMap support (for apps)
+configMap:
+  enabled: false
+  mount:
+    enabled: false
+    mountPath: /etc/extra-config
+  data: {}
