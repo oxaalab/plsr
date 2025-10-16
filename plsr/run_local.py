@@ -169,7 +169,7 @@ def _env_root_password(text: str, env_name: str) -> Optional[str]:
     return val.strip() if val else None
 
 def _sanitize_name(n: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_.-]+", "-", n)[:63] or "pulsar-service"
+    return re.sub(r"[^a-zA-Z0-9_.-]+", "-", n)[:63] or "plsr-service"
 
 def _ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
@@ -231,7 +231,7 @@ def _db_mount_host_dir_from_inspect(obj: dict, container_data_path: str) -> Opti
 def _allowed_delete_host_dir(host_dir: Path, root: Path, cfg_text: str, env_name: str) -> bool:
     bases = [
         _default_local_db_dir().resolve(),
-        (root / ".pulsar" / "data" / "mariadb").resolve(),
+        (root / ".plsr" / "data" / "mariadb").resolve(),
     ]
     cfg_path = _host_data_dir_from_config(cfg_text, env_name)
     if cfg_path:
@@ -492,7 +492,7 @@ def auto_stop(
 ) -> int:
     if not env_name:
         console.error("Environment name is required.")
-        console.tip("Use: pulsar docker stop <env> [options]")
+        console.tip("Use: plsr docker stop <env> [options]")
         console.info("Examples:")
         console.info("  ./ctl.sh docker stop local")
         return 2

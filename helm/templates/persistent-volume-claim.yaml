@@ -1,0 +1,17 @@
+{{- if .Values.persistentVolume.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "chart.fullname" . }}-pvc
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
+  labels:
+{{ include "chart.labels" . | indent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.persistentVolume.size | quote }}
+  {{- if .Values.persistentVolume.storageClass }}
+  storageClassName: "{{ .Values.persistentVolume.storageClass }}"
+  {{- end }}
+{{- end }}
