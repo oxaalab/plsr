@@ -1,0 +1,46 @@
+{{- if ne .Values.flavor "db-mariadb" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "chart.fullname" . }}
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
+  labels:
+{{ include "chart.labels" . | indent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+{{ include "chart.selectorLabels" . | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "chart.selectorLabels" . | indent 8 }}
+    spec:
+      {{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+      {{- range .Values.imagePullSecrets }}
+        - name: {{ . }}
+      {{- end }}
+      {{- end }}
+      containers:
+        - name: app
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.service.port }}
+              name: {{ default "app" .Values.service.name }}
+          {{- if .Values.extraEnv }}
+          env:
+          {{- range .Values.extraEnv }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+          {{- end }}
+          {{- end }}
+      {{- if and .Values.configMap.enabled .Values.configMap.mount.enabled }}
+      volumes:
+        - name: extra-config
+          configMap:
+            name: {{ include "chart.fullname" . }}-config
+            optional: true
+      {{- end }}
+{{- end }}
