@@ -15,14 +15,14 @@ def _detect_app_root() -> Path:
     """
     Determine the microservice root directory.
     Priority:
-      1) APP_ROOT env var (set by service ctl.sh)
+      1) APP_ROOT env var (only if it contains config.yaml or pyproject.toml)
       2) Walk up from CWD looking for config.yaml or pyproject.toml
       3) CWD fallback
     """
     env_root = os.getenv("APP_ROOT")
     if env_root:
         p = Path(env_root).resolve()
-        if p.is_dir():
+        if p.is_dir() and ((p / "config.yaml").is_file() or (p / "pyproject.toml").is_file()):
             return p
 
     cur = Path.cwd().resolve()
@@ -102,7 +102,7 @@ def _export_identity_env(app_name: str, app_version: str) -> None:
 
 
 def _in_venv() -> bool:
-    if os.getenv("PLSR_VENV_ACTIVE") == "1":
+    if os.getenv("PULSAR_VENV_ACTIVE") == "1":
         return True
     base = getattr(sys, "base_prefix", None) or getattr(sys, "prefix", None)
     return bool(hasattr(sys, "base_prefix") and sys.prefix != sys.base_prefix)
@@ -121,7 +121,7 @@ def _venv_python_path(venv_dir: Path) -> Path:
 
 def _run_cli_inline(argv: list[str]) -> int:
     """
-    Run the plsr CLI in the current interpreter (assumes already inside venv).
+    Run the Pulsar CLI in the current interpreter (assumes already inside venv).
     """
     app_root = _detect_app_root()
     name, ver = _read_name_version_from_config_yaml(app_root)
@@ -131,7 +131,7 @@ def _run_cli_inline(argv: list[str]) -> int:
         ver = ver or ver2 or "0.0.0"
     _export_identity_env(name, ver)
 
-    from plsr.cli import run_from_args
+    from pulsar.cli import run_from_args
     return run_from_args(argv)
 
 
@@ -140,22 +140,22 @@ def _spawn_in_temp_venv_and_cleanup(argv: list[str]) -> int:
     Create a temporary virtual environment, re-invoke this module inside it,
     wait for completion, then delete the venv directory (cleanup).
     """
-    repo_root = Path(__file__).resolve().parent.parent
-    tmp_dir = Path(tempfile.mkdtemp(prefix="plsr-venv-"))
+    pkg_root = Path(__file__).resolve().parent.parent.parent
+    tmp_dir = Path(tempfile.mkdtemp(prefix="pulsar-venv-"))
 
     try:
         subprocess.run([sys.executable, "-m", "venv", str(tmp_dir)], check=True)
 
         child_env = os.environ.copy()
-        child_env["PLSR_VENV_ACTIVE"] = "1"
+        child_env["PULSAR_VENV_ACTIVE"] = "1"
 
         existing_pp = child_env.get("PYTHONPATH")
         child_env["PYTHONPATH"] = (
-            f"{repo_root}{os.pathsep}{existing_pp}" if existing_pp else str(repo_root)
+            f"{pkg_root}{os.pathsep}{existing_pp}" if existing_pp else str(pkg_root)
         )
 
         vpy = _venv_python_path(tmp_dir)
-        cmd = [str(vpy), "-m", "plsr.bootstrap", *argv]
+        cmd = [str(vpy), "-m", "pulsar.bootstrap", *argv]
         result = subprocess.run(cmd, env=child_env)
         code = int(result.returncode)
 
@@ -164,17 +164,16 @@ def _spawn_in_temp_venv_and_cleanup(argv: list[str]) -> int:
         try:
             shutil.rmtree(tmp_dir)
         except Exception as e:
-            print(f"[plsr] Warning: failed to remove temp venv {tmp_dir}: {e}", file=sys.stderr)
+            print(f"[pulsar] Warning: failed to remove temp venv {tmp_dir}: {e}", file=sys.stderr)
 
 
 def main() -> None:
     """
-    Entry point that guarantees plsr runs inside a virtual env.
+    Entry point that guarantees Pulsar runs inside a virtual env.
 
-    NEW:
-      • For 'start local' on Python microservices, use a repo‑local venv (e.g., <APP_ROOT>/.venv)
-        instead of a one‑off temporary venv. This keeps app‑level deps local to the service.
-      • All other commands keep the previous ephemeral‑venv behavior.
+    For 'start local' on Python microservices, we prefer a repo‑local venv
+    (e.g., <APP_ROOT>/.venv) — see pulsar.core.pyvenv — keeping app deps local.
+    Other commands keep the ephemeral-venv behavior.
     """
     argv = sys.argv[1:]
 

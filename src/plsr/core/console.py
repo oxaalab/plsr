@@ -11,7 +11,7 @@ from typing import Iterable, Sequence, Optional
 from datetime import datetime
 from subprocess import Popen, PIPE, STDOUT
 
-__all__ = ["console", "plsr_log"]
+__all__ = ["console", "pulsar_log"]
 
 def _enable_windows_ansi() -> None:
     if os.name != "nt":
@@ -78,22 +78,22 @@ def _c(text: str, color: str | None = None, *, bold: bool = False, dim: bool = F
 class Console:
     """
     Small, dependency-free console helper:
-      - Colorized, consistent prefix: "[plsr]"
+      - Colorized, consistent prefix: "[pulsar]"
       - Section headers & ruled lines
       - Streaming command runner (merges stdout/stderr, keeps Docker progress)
       - Lightweight error highlighting and ECR auth hint
       - Graceful Ctrl+C handling for foreground processes
     """
     def __init__(self) -> None:
-        self.theme = os.getenv("plsr_THEME", "neon").lower()
+        self.theme = os.getenv("PULSAR_THEME", "neon").lower()
         if self.theme == "neon":
-            self.prefix_raw = "[plsr]"
-            self.prefix_colored = "\x1b[95;1m[\x1b[96;1mplsr\x1b[95;1m]\x1b[0m" if _USE_COLOR else "[plsr]"
+            self.prefix_raw = "[PULSAR]"
+            self.prefix_colored = "\x1b[95;1m[\x1b[96;1mPULSAR\x1b[95;1m]\x1b[0m" if _USE_COLOR else "[PULSAR]"
         elif self.theme == "retro":
-            self.prefix_raw = "[plsr]"
-            self.prefix_colored = "\x1b[92;1m[plsr]\x1b[0m" if _USE_COLOR else "[plsr]"
+            self.prefix_raw = "[PULSAR]"
+            self.prefix_colored = "\x1b[92;1m[PULSAR]\x1b[0m" if _USE_COLOR else "[PULSAR]"
         else:
-            self.prefix_raw = "[plsr]"
+            self.prefix_raw = "[pulsar]"
             self.prefix_colored = _c(self.prefix_raw, "cyan", bold=True)
         self._lock = threading.Lock()
 
@@ -325,13 +325,13 @@ class Console:
         theme = theme.lower()
         self.theme = theme
         if self.theme == "neon":
-            self.prefix_raw = "[plsr]"
-            self.prefix_colored = "\x1b[95;1m[\x1b[96;1mplsr\x1b[95;1m]\x1b[0m" if _USE_COLOR else "[plsr]"
+            self.prefix_raw = "[PULSAR]"
+            self.prefix_colored = "\x1b[95;1m[\x1b[96;1mPULSAR\x1b[95;1m]\x1b[0m" if _USE_COLOR else "[PULSAR]"
         elif self.theme == "retro":
-            self.prefix_raw = "[plsr]"
-            self.prefix_colored = "\x1b[92;1m[plsr]\x1b[0m" if _USE_COLOR else "[plsr]"
+            self.prefix_raw = "[PULSAR]"
+            self.prefix_colored = "\x1b[92;1m[PULSAR]\x1b[0m" if _USE_COLOR else "[PULSAR]"
         else:
-            self.prefix_raw = "[plsr]"
+            self.prefix_raw = "[pulsar]"
             self.prefix_colored = _c(self.prefix_raw, "cyan", bold=True)
 
     def spinner(self, text: str = "Loading", duration: float = 3.0) -> None:
@@ -380,8 +380,8 @@ class Console:
 
 console = Console()
 
-def plsr_log(msg: str) -> None:
+def pulsar_log(msg: str) -> None:
     """
-    Back-compat alias expected by modules importing `from plsr import plsr_log`.
+    Back-compat alias expected by modules importing `from import pulsar_log`.
     """
     console.log(msg)

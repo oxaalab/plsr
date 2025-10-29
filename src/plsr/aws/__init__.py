@@ -9,15 +9,17 @@ import platform as _platform
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from .console import console
+from ..core.console import console
 
 _PRIV_ECR_HOST = re.compile(r"(?P<host>(?P<acct>\d{12})\.dkr\.ecr\.(?P<region>[a-z0-9-]+)\.amazonaws\.com)")
 _PUB_ECR_HOST = re.compile(r"(?:^|/)(public\.ecr\.aws)(?:/|$)")
 _VAR_BRACE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _VAR_SIMPLE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
 
+
 def _which(cmd: str) -> Optional[str]:
     return shutil.which(cmd)
+
 
 def _require(cmd: str, friendly: str) -> bool:
     if _which(cmd) is None:
@@ -25,10 +27,8 @@ def _require(cmd: str, friendly: str) -> bool:
         return False
     return True
 
+
 def _aws_env(extra: Optional[dict] = None) -> dict:
-    """
-    Ensure AWS CLI never opens a pager and behaves non-interactively.
-    """
     env = os.environ.copy()
     env["AWS_PAGER"] = ""
     if extra:
@@ -36,27 +36,22 @@ def _aws_env(extra: Optional[dict] = None) -> dict:
     return env
 
 
-
 def _default_region(fallback: Optional[str] = None) -> Optional[str]:
     return os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or fallback
 
+
 def _extract_ecr_host_region(s: str) -> Optional[Tuple[str, str]]:
-    """
-    Return (host, region) for private ECR like:
-      123456789012.dkr.ecr.eu-west-1.amazonaws.com/my/repo:tag
-    """
     m = _PRIV_ECR_HOST.search(s)
     if not m:
         return None
     return m.group("host"), m.group("region")
 
+
 def _is_public_ecr(s: str) -> bool:
     return _PUB_ECR_HOST.search(s) is not None
 
+
 def aws_sts_identity(region: Optional[str]) -> Tuple[int, str]:
-    """
-    Run 'aws sts get-caller-identity' and return (code, output).
-    """
     if not _require("aws", "aws CLI"):
         return 127, "aws CLI missing"
     cmd = ["aws", "--no-cli-pager", "sts", "get-caller-identity"]
@@ -71,10 +66,8 @@ def aws_sts_identity(region: Optional[str]) -> Tuple[int, str]:
         console.error(f"AWS identity check failed: {out}")
     return res.returncode, out
 
+
 def ecr_login(registry_host: str, region: str) -> int:
-    """
-    Log in to private ECR registry via docker.
-    """
     if not _require("aws", "aws CLI"):
         return 127
     if not _require("docker", "docker"):
@@ -105,10 +98,6 @@ def ecr_login(registry_host: str, region: str) -> int:
 
 
 def ecr_get_login_password(region: str) -> Tuple[int, str]:
-    """
-    Return (exit_code, password) from `aws ecr get-login-password --region <region>`.
-    The password is not logged; caller must handle it securely (e.g., write to a temp file).
-    """
     if not _require("aws", "aws CLI"):
         return 127, ""
     try:
@@ -124,11 +113,6 @@ def ecr_get_login_password(region: str) -> Tuple[int, str]:
 
 
 def parse_ecr_image_ref(image_ref: str) -> Optional[Dict[str, str]]:
-    """
-    Parse <acct>.dkr.ecr.<region>.amazonaws.com/<repository>:<tag>
-    Returns dict with keys: host, region, account, repository, tag, private(bool).
-    For public.ecr.aws/* returns dict with 'private': False (limited support).
-    """
     if "@" in image_ref:
         if "/" in image_ref:
             host, rest = image_ref.split("/", 1)
@@ -168,6 +152,7 @@ def parse_ecr_image_ref(image_ref: str) -> Optional[Dict[str, str]]:
 
     return None
 
+
 def ecr_repo_exists(host: str, region: str, repository: str, *, account: Optional[str] = None) -> Tuple[bool, Optional[dict]]:
     if not _require("aws", "aws CLI"):
         return False, None
@@ -183,6 +168,7 @@ def ecr_repo_exists(host: str, region: str, repository: str, *, account: Optiona
         return True, data
     return False, None
 
+
 def ecr_ensure_repo(host: str, region: str, repository: str, *, account: Optional[str] = None) -> int:
     ok, _ = ecr_repo_exists(host, region, repository, account=account)
     if ok:
@@ -194,10 +180,15 @@ def ecr_ensure_repo(host: str, region: str, repository: str, *, account: Optiona
     res = subprocess.run(cmd, env=_aws_env())
     return int(res.returncode or 0)
 
+
 def ecr_image_exists(host: str, region: str, repository: str, tag: str, *, account: Optional[str] = None) -> Tuple[bool, Optional[dict]]:
     if not _require("aws", "aws CLI"):
         return False, None
-    cmd = ["aws", "--no-cli-pager", "ecr", "describe-images", "--repository-name", repository, "--image-ids", f"imageTag={tag}", "--region", region, "--output", "json"]
+    cmd = [
+        "aws", "--no-cli-pager", "ecr", "describe-images",
+        "--repository-name", repository, "--image-ids", f"imageTag={tag}",
+        "--region", region, "--output", "json"
+    ]
     if account:
         cmd += ["--registry-id", account]
     res = subprocess.run(cmd, capture_output=True, text=True, env=_aws_env())
@@ -211,10 +202,15 @@ def ecr_image_exists(host: str, region: str, repository: str, tag: str, *, accou
         return False, data
     return False, None
 
+
 def ecr_delete_image_by_tag(host: str, region: str, repository: str, tag: str, *, account: Optional[str] = None) -> int:
     if not _require("aws", "aws CLI"):
         return 127
-    cmd = ["aws", "--no-cli-pager", "ecr", "batch-delete-image", "--repository-name", repository, "--image-ids", f"imageTag={tag}", "--region", region]
+    cmd = [
+        "aws", "--no-cli-pager", "ecr", "batch-delete-image",
+        "--repository-name", repository, "--image-ids", f"imageTag={tag}",
+        "--region", region
+    ]
     if account:
         cmd += ["--registry-id", account]
     res = subprocess.run(cmd, env=_aws_env())
@@ -232,6 +228,7 @@ def _resolve_vars(template: str, mapping: Dict[str, str]) -> str:
     out = _VAR_SIMPLE.sub(sm, out)
     return out
 
+
 def _build_arg_map(build_args: Iterable[str]) -> Dict[str, str]:
     m: Dict[str, str] = {}
     for item in build_args or []:
@@ -241,6 +238,7 @@ def _build_arg_map(build_args: Iterable[str]) -> Dict[str, str]:
             if k:
                 m[k] = v
     return m
+
 
 def parse_dockerfile_base_images(dockerfile_path: Path, build_args: Iterable[str]) -> List[str]:
     if not dockerfile_path.is_file():
@@ -287,6 +285,7 @@ def parse_dockerfile_base_images(dockerfile_path: Path, build_args: Iterable[str
             seen.add(b)
     return unique
 
+
 def _collect_private_ecr_hosts(images: Iterable[str]) -> Dict[str, str]:
     hosts: Dict[str, str] = {}
     for img in images or []:
@@ -295,6 +294,7 @@ def _collect_private_ecr_hosts(images: Iterable[str]) -> Dict[str, str]:
             host, region = ext
             hosts[host] = region
     return hosts
+
 
 def preflight_aws_and_ecr(
     *,
@@ -305,15 +305,8 @@ def preflight_aws_and_ecr(
     need_push: bool,
     pre_pull: bool = True,
 ) -> int:
-    """
-    Perform initial checks for builds (docker buildx).
-    - Ensures docker & aws are present.
-    - Parses Dockerfile to discover ECR-based base images; logs into each private ECR.
-    - If dest_ecr (target registry) is private, logs into it as well.
-    - Optionally pre-pulls private ECR base images to avoid build-time auth issues.
-    """
-    if os.getenv("PLSR_SKIP_AWS_PREFLIGHT") == "1":
-        console.warn("Skipping AWS/ECR preflight (PLSR_SKIP_AWS_PREFLIGHT=1).")
+    if os.getenv("PULSAR_SKIP_AWS_PREFLIGHT") == "1":
+        console.warn("Skipping AWS/ECR preflight (PULSAR_SKIP_AWS_PREFLIGHT=1).")
         return 0
 
     if not _require("docker", "docker"):
@@ -322,7 +315,6 @@ def preflight_aws_and_ecr(
         return 1
 
     console.section("AWS/ECR preflight")
-
 
     dockerfile_path: Optional[Path] = None
     if dockerfile:
@@ -345,13 +337,11 @@ def preflight_aws_and_ecr(
 
     host_regions = _collect_private_ecr_hosts(base_images)
 
-
     if dest_ecr and not _is_public_ecr(dest_ecr):
         ext = _extract_ecr_host_region(dest_ecr)
         if ext:
             h, r = ext
             host_regions[h] = r
-
 
     sts_region = None
     if dest_ecr:
@@ -362,17 +352,14 @@ def preflight_aws_and_ecr(
         sts_region = next(iter(host_regions.values()))
     sts_region = _default_region(sts_region)
 
-
     code, _ = aws_sts_identity(sts_region)
     if code != 0:
         return code
-
 
     for host, region in host_regions.items():
         rc = ecr_login(host, region)
         if rc != 0:
             return rc
-
 
     if pre_pull and base_images:
         for img in base_images:
@@ -386,15 +373,7 @@ def preflight_aws_and_ecr(
     return 0
 
 
-
 def ensure_image_pullable(image_ref: str, *, allow_skip: bool = False, force_pull: bool = False) -> int:
-    """
-    For a given image reference, make sure we can pull/run it:
-      - If private ECR, perform ECR login (uses region from image).
-      - If not present locally or force_pull=True → 'docker pull <image>'.
-      - On ARM hosts, if pull fails due to missing arm64 manifest, retry with '--platform linux/amd64'.
-    Returns 0 on success.
-    """
     if not _require("docker", "docker"):
         return 1
 
@@ -411,7 +390,10 @@ def ensure_image_pullable(image_ref: str, *, allow_skip: bool = False, force_pul
 
     need_pull = bool(force_pull)
     if not need_pull:
-        probe = subprocess.run(["docker", "image", "inspect", image_ref], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        probe = subprocess.run(
+            ["docker", "image", "inspect", image_ref],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
         need_pull = (probe.returncode != 0)
 
     if need_pull:
