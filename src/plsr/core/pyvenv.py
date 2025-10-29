@@ -21,23 +21,35 @@ except Exception:
         _toml = None
 
 
+def _is_app_root_dir(p: Path) -> bool:
+    """
+    A directory 'looks like' a microservice root if it contains either:
+      • config.yaml, or
+      • pyproject.toml
+    """
+    try:
+        return ((p / "config.yaml").is_file()) or ((p / "pyproject.toml").is_file())
+    except Exception:
+        return False
+
+
 def _detect_app_root() -> Path:
     """
     Determine the microservice root directory.
     Priority:
-      1) APP_ROOT env var (set by service ctl.sh)
+      1) APP_ROOT env var (only if it contains config.yaml or pyproject.toml)
       2) Walk up from CWD looking for config.yaml or pyproject.toml
       3) CWD fallback
     """
     env_root = os.getenv("APP_ROOT")
     if env_root:
         p = Path(env_root).expanduser().resolve()
-        if p.is_dir():
+        if p.is_dir() and _is_app_root_dir(p):
             return p
 
     cur = Path.cwd().resolve()
     for p in (cur, *cur.parents):
-        if (p / "config.yaml").is_file() or (p / "pyproject.toml").is_file():
+        if _is_app_root_dir(p):
             return p
     return cur
 
@@ -199,6 +211,12 @@ def _is_pep621_with_name(meta: dict) -> bool:
     return bool(proj.get("name"))
 
 
+def _is_poetry_project(meta: dict) -> bool:
+    tool = meta.get("tool") or {}
+    poetry = tool.get("poetry") or {}
+    return bool(poetry.get("name"))
+
+
 def _project_dependencies(meta: dict) -> List[str]:
     """
     Extract [project].dependencies for app-style repos (no package build step).
@@ -231,6 +249,8 @@ def _should_try_editable(app_root: Path, meta: dict) -> tuple[bool, str]:
         return True, "setup.py/setup.cfg present"
     if _is_pep621_with_name(meta):
         return True, "pyproject [project.name] present"
+    if _is_poetry_project(meta):
+        return True, "pyproject [tool.poetry.name] present"
     return False, "no package metadata detected (app-only repo)"
 
 
@@ -246,14 +266,15 @@ def _install_project_deps_if_needed(app_root: Path, venv_dir: Path, vpy: str) ->
     """
     Core dependency installer:
       • Upgrade pip/setuptools/wheel,
-      • If repo is a package (setup.py or [project.name]) → editable install,
+      • If repo is a package (setup.py or [project.name] or [tool.poetry.name]) → editable install,
+        and if editable fails for Poetry projects → fallback to non-editable `pip install .`,
       • Else if app-only → install from [project.dependencies],
       • Fallback to requirements.txt when provided.
     """
-    marker = venv_dir / ".plsr-deps.sha256"
+    marker = venv_dir / ".pulsar-deps.sha256"
     digest = _hash_inputs_for_deps(app_root)
 
-    force = os.getenv("PLSR_FORCE_DEPS", "").strip().lower() in ("1", "true", "yes", "y")
+    force = os.getenv("PULSAR_FORCE_DEPS", "").strip().lower() in ("1", "true", "yes", "y")
 
     need = True
     if marker.exists() and not force:
@@ -277,10 +298,8 @@ def _install_project_deps_if_needed(app_root: Path, venv_dir: Path, vpy: str) ->
 
     try_editable, reason = _should_try_editable(app_root, meta)
     if try_editable:
-        install_spec = "."
-        extras = os.getenv("PLSR_INSTALL_EXTRAS", "").strip()
-        if extras:
-            install_spec = f".[{extras}]"
+        extras = os.getenv("PULSAR_INSTALL_EXTRAS", "").strip()
+        install_spec = f".[{extras}]" if extras else "."
         console.info(f"Attempting editable install ({reason})")
         rc_edit = console.run([vpy, "-m", "pip", "install", "-e", install_spec], cwd=str(app_root))
         if rc_edit == 0:
@@ -290,6 +309,17 @@ def _install_project_deps_if_needed(app_root: Path, venv_dir: Path, vpy: str) ->
                 pass
             console.success("Dependencies are installed and up to date.")
             return 0
+
+        if _is_poetry_project(meta):
+            console.warn("Editable install failed; attempting standard install for Poetry project.")
+            rc_std = console.run([vpy, "-m", "pip", "install", install_spec], cwd=str(app_root))
+            if rc_std == 0:
+                try:
+                    marker.write_text(digest, encoding="utf-8")
+                except Exception:
+                    pass
+                console.success("Dependencies are installed and up to date.")
+                return 0
 
         console.warn("Editable install failed; falling back to app-style/requirements install.")
 
@@ -338,7 +368,7 @@ def _load_dotenv_into(dst_env: dict, app_root: Path) -> None:
     to PYTHONPATH to mirror local.sh behavior.
     """
     try:
-        env_name = (dst_env.get("PLSR_ENV") or dst_env.get("ENV") or "local").strip()
+        env_name = (dst_env.get("PULSAR_ENV") or dst_env.get("ENV") or "local").strip()
         candidates = [
             app_root / f".env.{env_name}",
             app_root / f"env.{env_name}",
@@ -377,6 +407,21 @@ def _load_dotenv_into(dst_env: dict, app_root: Path) -> None:
         pass
 
 
+def _extract_env_from_argv(argv: list[str]) -> str | None:
+    """
+    Support both 'pulsar start <env>' and 'pulsar <env> start' shapes.
+    """
+    if not argv:
+        return None
+    if argv[0] == "start" and len(argv) >= 2:
+        return argv[1]
+    if argv[0] == "app" and len(argv) >= 3 and argv[1] == "start":
+        return argv[2]
+    if len(argv) >= 2 and argv[1] == "start":
+        return argv[0]
+    return None
+
+
 def should_use_repo_venv(argv: list[str]) -> bool:
     """
     Decide whether to run inside a repo‑local venv instead of the ephemeral venv.
@@ -385,12 +430,12 @@ def should_use_repo_venv(argv: list[str]) -> bool:
       • We are handling a 'start' invocation (either 'start <env>' or '<env> start'),
       • Env is 'local' (exact),
       • The current microservice flavor is *not* 'db-mariadb' (i.e., it's a Python app),
-      • Not explicitly disabled via plsr_SKIP_REPO_VENV=1.
-    Force enable with plsr_FORCE_REPO_VENV=1.
+      • Not explicitly disabled via PULSAR_SKIP_REPO_VENV=1.
+    Force enable with PULSAR_FORCE_REPO_VENV=1.
     """
-    if os.getenv("PLSR_SKIP_REPO_VENV", "").strip() in ("1", "true", "yes", "y"):
+    if os.getenv("PULSAR_SKIP_REPO_VENV", "").strip() in ("1", "true", "yes", "y"):
         return False
-    if os.getenv("PLSR_FORCE_REPO_VENV", "").strip() in ("1", "true", "yes", "y"):
+    if os.getenv("PULSAR_FORCE_REPO_VENV", "").strip() in ("1", "true", "yes", "y"):
         return True
 
     tokens = [t for t in (argv or []) if t and not t.startswith("-")]
@@ -399,7 +444,7 @@ def should_use_repo_venv(argv: list[str]) -> bool:
         return False
 
     env_in_argv = _extract_env_from_argv(argv)
-    env_in_env = os.getenv("PLSR_ENV") or os.getenv("ENV")
+    env_in_env = os.getenv("PULSAR_ENV") or os.getenv("ENV")
     env_name = (env_in_argv or env_in_env or "local").strip().lower()
     if env_name != "local":
         return False
@@ -411,7 +456,7 @@ def should_use_repo_venv(argv: list[str]) -> bool:
 
 def _purge_pycache_dirs(app_root: Path) -> None:
     """
-    Delete all __pycache__ directories under app_root (best-effort).
+    Delete __pycache__ trees and common Python temp directories under app_root.
     """
     console.info("Removing __pycache__ directories…")
     try:
@@ -420,22 +465,41 @@ def _purge_pycache_dirs(app_root: Path) -> None:
                 if d == "__pycache__":
                     p = Path(root) / d
                     try:
-                        shutil.rmtree(p)
+                        shutil.rmtree(p, ignore_errors=True)
                     except Exception:
                         pass
     except Exception:
         pass
 
+    extras_dirs = [".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", "build", "dist", "htmlcov"]
+    for name in extras_dirs:
+        try:
+            p = app_root / name
+            if p.exists():
+                if p.is_dir():
+                    shutil.rmtree(p, ignore_errors=True)
+                else:
+                    p.unlink(missing_ok=True)
+        except Exception:
+            pass
+    for f in [".coverage"]:
+        try:
+            fp = app_root / f
+            if fp.is_file():
+                fp.unlink()
+        except Exception:
+            pass
+
 
 def _cleanup_repo_runtime(app_root: Path, venv_dir: Path) -> None:
     """
     Cleanup routine for Python app runtime:
-      • Remove all __pycache__ dirs under the repo,
+      • Remove all __pycache__ dirs and common test/build caches under the repo,
       • Remove the repo-local virtualenv directory.
-    Can be skipped with plsr_KEEP_REPO_VENV=1.
+    Can be skipped with PULSAR_KEEP_REPO_VENV=1.
     """
-    if os.getenv("PLSR_KEEP_REPO_VENV", "").strip().lower() in ("1", "true", "yes", "y"):
-        console.warn("Skipping cleanup (PLSR_KEEP_REPO_VENV=1).")
+    if os.getenv("PULSAR_KEEP_REPO_VENV", "").strip().lower() in ("1", "true", "yes", "y"):
+        console.warn("Skipping cleanup (PULSAR_KEEP_REPO_VENV=1).")
         return
 
     console.section("Cleanup")
@@ -444,7 +508,7 @@ def _cleanup_repo_runtime(app_root: Path, venv_dir: Path) -> None:
     try:
         if venv_dir.exists():
             console.info(f"Removing repo venv: {venv_dir}")
-            shutil.rmtree(venv_dir)
+            shutil.rmtree(venv_dir, ignore_errors=True)
             console.success("Repo venv removed.")
     except Exception:
         pass
@@ -453,15 +517,15 @@ def _cleanup_repo_runtime(app_root: Path, venv_dir: Path) -> None:
 def spawn_in_repo_venv(argv: list[str]) -> int:
     """
     Ensure a repo‑local venv exists (preferring <APP_ROOT>/.venv) and re‑invoke
-    plsr inside it, preserving plsr on PYTHONPATH.
+    Pulsar inside it, preserving on PYTHONPATH.
     Also loads .env files into the child environment (best effort).
 
     On exit (normal or via Ctrl‑C), clean up: remove __pycache__ dirs and the
-    repo venv, unless plsr_KEEP_REPO_VENV=1 is set.
+    repo venv, unless PULSAR_KEEP_REPO_VENV=1 is set.
     """
     app_root = _detect_app_root()
 
-    override = os.getenv("PLSR_VENV_DIR")
+    override = os.getenv("PULSAR_VENV_DIR")
     if override:
         venv_dir = Path(override).expanduser().resolve()
     else:
@@ -480,23 +544,22 @@ def spawn_in_repo_venv(argv: list[str]) -> int:
         _cleanup_repo_runtime(app_root, venv_dir)
         return 1
 
-    repo_root = Path(__file__).resolve().parent.parent
-
     child = os.environ.copy()
-    child["PLSR_VENV_ACTIVE"] = "1"
+    child["PULSAR_VENV_ACTIVE"] = "1"
     child.setdefault("APP_ROOT", str(app_root))
     env_from_argv = _extract_env_from_argv(argv)
     if env_from_argv:
-        child.setdefault("PLSR_ENV", env_from_argv)
+        child.setdefault("PULSAR_ENV", env_from_argv)
 
     _load_dotenv_into(child, app_root)
 
+    src_dir = Path(__file__).resolve().parents[2]
     existing_pp = child.get("PYTHONPATH")
-    child["PYTHONPATH"] = f"{repo_root}{os.pathsep}{existing_pp}" if existing_pp else str(repo_root)
+    child["PYTHONPATH"] = f"{src_dir}{os.pathsep}{existing_pp}" if existing_pp else str(src_dir)
 
-    cmd = [str(vpy), "-m", "plsr.bootstrap", *argv]
+    cmd = [str(_venv_python_path(venv_dir)), "-m", "pulsar.bootstrap", *argv]
     console.section("Repo venv launcher")
-    console.info(f"Env:    {child.get('PLSR_ENV', 'local')}")
+    console.info(f"Env:    {child.get('PULSAR_ENV', 'local')}")
     console.info(f"Root:   {app_root}")
     console.info(f"Venv:   {venv_dir}")
 
@@ -516,18 +579,3 @@ def spawn_in_repo_venv(argv: list[str]) -> int:
         _cleanup_repo_runtime(app_root, venv_dir)
 
     return rc
-
-
-def _extract_env_from_argv(argv: list[str]) -> str | None:
-    """
-    Support both 'plsr start <env>' and 'plsr <env> start' shapes.
-    """
-    if not argv:
-        return None
-    if argv[0] == "start" and len(argv) >= 2:
-        return argv[1]
-    if argv[0] == "app" and len(argv) >= 3 and argv[1] == "start":
-        return argv[2]
-    if len(argv) >= 2 and argv[1] == "start":
-        return argv[0]
-    return None
